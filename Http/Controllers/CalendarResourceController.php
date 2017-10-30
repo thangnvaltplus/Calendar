@@ -2,7 +2,7 @@
 
 namespace Litepie\Calendar\Http\Controllers;
 
-use App\Http\Controllers\AdminController as BaseController;
+use App\Http\Controllers\ResourceController as BaseController;
 use Form;
 use Litepie\Calendar\Http\Requests\CalendarRequest;
 use Litepie\Calendar\Interfaces\CalendarRepositoryInterface;
@@ -11,22 +11,8 @@ use Litepie\Calendar\Models\Calendar;
 /**
  * Admin web controller class.
  */
-class CalendarAdminController extends BaseController
+class CalendarResourceController extends BaseController
 {
-
-    /**
-     * The authentication guard that should be used.
-     *
-     * @var string
-     */
-    public $guard = 'admin.web';
-
-    /**
-     * The home page route of admin.
-     *
-     * @var string
-     */
-    public $home = 'admin';
 
     /**
      * Initialize calendar controller.
@@ -37,10 +23,11 @@ class CalendarAdminController extends BaseController
      */
     public function __construct(CalendarRepositoryInterface $calendar)
     {
-        $this->repository = $calendar;
-        $this->middleware('auth:admin.web');
-        $this->setupTheme(config('theme.themes.admin.theme'), config('theme.themes.admin.layout'));
         parent::__construct();
+        $this->repository = $calendar;
+        $this->repository
+            ->pushCriteria(\Litepie\Repository\Criteria\RequestCriteria::class)
+            ->pushCriteria(\Litepie\Calendar\Repositories\Criteria\CalendarResourceCriteria::class);
     }
 
     /**
@@ -50,20 +37,15 @@ class CalendarAdminController extends BaseController
      */
     public function index(CalendarRequest $request)
     {
-        $this->theme->asset()->usepath()->add('fullcalendar-css', 'packages/fullcalendar/fullcalendar.min.css');
-        $this->theme->asset()->container('extra')->usepath()->add('jquery-ui', 'packages/jquery-ui/jquery-ui.js');
-        $this->theme->asset()->container('extra')->usepath()->add('fullcalendar-js', 'packages/fullcalendar/fullcalendar.min.js');
 
-       
         $calendars = $this->repository
-            ->pushCriteria(new \Litepie\Calendar\Repositories\Criteria\CalendarAdminCriteria())
-            ->pushCriteria(new \Litepie\Calendar\Repositories\Criteria\CalendarEventCriteria())       
-            ->scopeQuery(function ($query) {
-                return $query->orderBy('id', 'DESC');
-            })->all();
+            ->all();
 
-        $this->theme->prependTitle(trans('calendar::calendar.names'));
-        return $this->theme->of('calendar::admin.calendar.index',compact('calendars'))->render();
+        return $this->response->title(trans('calendar::calendar.names'))
+            ->view('calendar::admin.calendar.index')
+            ->data(compact('calendars'))
+            ->output();
+
     }
 
     /**
@@ -94,11 +76,11 @@ class CalendarAdminController extends BaseController
      */
     public function create(CalendarRequest $request)
     {
- 
-        $calendar = $this->repository->newInstance([]);
-       @$calendar['start']=date('Y-m-d H:i',strtotime($request->get('dates')));
-       @$calendar['end']=date('Y-m-d 23:i',strtotime($request->get('dates')));
-   
+
+        $calendar          = $this->repository->newInstance([]);
+        $calendar['start'] = format_date_time(request('start'));
+        $calendar['end']   = format_date_time(request('end'));
+
         Form::populate($calendar);
 
         return response()->view('calendar::admin.calendar.create', compact('calendar'));
@@ -115,23 +97,25 @@ class CalendarAdminController extends BaseController
     public function store(CalendarRequest $request)
     {
         try {
-            $attributes = $request->all();          
-            $attributes['user_id'] = user_id('admin.web');
+            $attributes              = $request->all();
+            $attributes['user_id']   = user_id();
             $attributes['user_type'] = user_type();
-            $calendar = $this->repository->create($attributes);
-
-            return redirect(trans_url('/admin/calendar/calendar'))
-                ->with('message', trans('messages.success.created', ['Module' => trans('calendar::calendar.name')]))
-                ->with('code', 201);
-
+            $calendar                = $this->repository->create($attributes);
+            return $this->response->message(trans('messages.success.created', ['Module' => trans('calendar::calendar.name')]))
+                ->code(204)
+                ->status('success')
+                ->url(trans_url($this->getGuardRoute() . '/calendar/calendar/' . $calendar->getRouteKey()))
+                ->redirect();
         } catch (Exception $e) {
-            return response()->json([
-                'message' => $e->getMessage(),
-                'code'    => 400,
-            ], 400);
+            return $this->response->message($e->getMessage())
+                ->code(400)
+                ->status('error')
+                ->url(trans_url($this->getGuardRoute() . '/calendar/calendar'))
+                ->redirect();
         }
 
     }
+
     /**
      * Show calendar for editing.
      *
@@ -157,23 +141,10 @@ class CalendarAdminController extends BaseController
     public function update(CalendarRequest $request, Calendar $calendar)
     {
         try {
-            if($request->has('data')){
-                parse_str($request->get('data'), $attributes);
-            }
-            else{
-                $attributes=$request->all();
-            }
-            $status = $attributes['status'];
-            
 
-            if ($status == 'Both') {
-                $attributes['user_id'] = user_id("admin.web");
-                $attributes['user_type'] = user_type("admin.web");
-                $calendar->create($attributes);
-            } else {
-                $calendar->update($attributes);
-            }            
+            $attributes = $request->all();
 
+            $calendar->update($attributes);
             return response()->json([
                 'message'  => trans('messages.success.updated', ['Module' => trans('calendar::calendar.name')]),
                 'code'     => 204,
@@ -223,7 +194,6 @@ class CalendarAdminController extends BaseController
 
     }
 
-
     /**
      * display the calendarList.
      *
@@ -232,30 +202,33 @@ class CalendarAdminController extends BaseController
     public function calendarList()
     {
 
-         $arr = $this->repository->scopeQuery(function($query){
-                       return $query->where('status', '!=', 'Draft');
-                       
-                 })->all();
+        $arr = $this->repository->scopeQuery(function ($query) {
+            return $query->where('status', '!=', 'Draft');
+
+        })->all();
 
         $temp = [];
+
         foreach ($arr as $key => $value) {
 
-            $temp[$key]['id'] = $value->getRouteKey();
-            $temp[$key]['title'] = $value['title'];
-            $temp[$key]['start'] = date('Y-m-d H:i:s', strtotime($value['start']));
-            $temp[$key]['end'] = date('Y-m-d H:i:s', strtotime($value['end']));
+            $temp[$key]['id']        = $value->getRouteKey();
+            $temp[$key]['title']     = $value['title'];
+            $temp[$key]['start']     = date('Y-m-d H:i:s', strtotime($value['start']));
+            $temp[$key]['end']       = date('Y-m-d H:i:s', strtotime($value['end']));
             $temp[$key]['className'] = $value['color'];
         }
+
         return json_encode($temp);
     }
-     /**
+
+    /**
      * Display a list of calendar.
      *
      * @return Response
      */
     public function draft(CalendarRequest $request)
-    {        
-     
+    {
+
         $calendars = $this->repository
             ->pushCriteria(new \Litepie\Calendar\Repositories\Criteria\CalendarAdminCriteria())
             ->pushCriteria(new \Litepie\Calendar\Repositories\Criteria\CalendarEventCriteria())
@@ -263,9 +236,7 @@ class CalendarAdminController extends BaseController
                 return $query->orderBy('id', 'DESC');
             })->all();
 
-        
-        return view('calendar::admin.calendar.draft',compact('calendars'));
+        return view('calendar::admin.calendar.draft', compact('calendars'));
     }
-
 
 }

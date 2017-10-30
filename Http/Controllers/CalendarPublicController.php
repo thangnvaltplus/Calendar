@@ -1,15 +1,11 @@
 <?php
 
-namespace Litepie\Calendar\Http\Controllers\Api;
+namespace Litepie\Calendar\Http\Controllers;
 
-use App\Http\Controllers\Controller as BaseController;
+use App\Http\Controllers\PublicController as BaseController;
 use Litepie\Calendar\Interfaces\CalendarRepositoryInterface;
-use Litepie\Calendar\Repositories\Presenter\CalendarItemTransformer;
 
-/**
- * Pubic API controller class.
- */
-class CalendarController extends BaseController
+class CalendarPublicController extends BaseController
 {
     /**
      * Constructor.
@@ -21,7 +17,8 @@ class CalendarController extends BaseController
     public function __construct(CalendarRepositoryInterface $calendar)
     {
         $this->repository = $calendar;
-        $this->middleware('api');
+        $this->middleware('web');
+        $this->setupTheme(config('theme.themes.public.theme'), config('theme.themes.public.layout'));
         parent::__construct();
     }
 
@@ -36,14 +33,11 @@ class CalendarController extends BaseController
     {
         $calendars = $this->repository
             ->pushCriteria(new \Litepie\Calendar\Repositories\Criteria\CalendarPublicCriteria())
-            ->setPresenter('\\Litepie\\Calendar\\Repositories\\Presenter\\CalendarListPresenter')
             ->scopeQuery(function($query){
                 return $query->orderBy('id','DESC');
             })->paginate();
 
-        $calendars['code'] = 2000;
-        return response()->json($calendars)
-                ->setStatusCode(200, 'INDEX_SUCCESS');
+        return $this->theme->of('calendar::public.calendar.index', compact('calendars'))->render();
     }
 
     /**
@@ -55,21 +49,11 @@ class CalendarController extends BaseController
      */
     protected function show($slug)
     {
-        $calendar = $this->repository
-            ->scopeQuery(function($query) use ($slug) {
+        $calendar = $this->repository->scopeQuery(function($query) use ($slug) {
             return $query->orderBy('id','DESC')
                          ->where('slug', $slug);
         })->first(['*']);
 
-        if (!is_null($calendar)) {
-            $calendar         = $this->itemPresenter($module, new CalendarItemTransformer);
-            $calendar['code'] = 2001;
-            return response()->json($calendar)
-                ->setStatusCode(200, 'SHOW_SUCCESS');
-        } else {
-            return response()->json([])
-                ->setStatusCode(400, 'SHOW_ERROR');
-        }
-
+        return $this->theme->of('calendar::public.calendar.show', compact('calendar'))->render();
     }
 }
